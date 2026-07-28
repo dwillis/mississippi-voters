@@ -1,0 +1,26 @@
+[project]
+name = "msvoters"
+version = "0.1.0"
+description = "Mississippi voter file CLI — ingest weekly SOS drops, report, and subset."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.4.2",
+    "duckdb>=1.5.5",
+    "rich>=15.0.0",
+]
+
+[project.scripts]
+msvoters = "msvoters.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["msvoters"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
