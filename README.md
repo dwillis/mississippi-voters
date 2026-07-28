@@ -44,6 +44,140 @@ uv run msvoters subset [filters] -o FILE.csv
 The DuckDB file defaults to `data/msvoters.duckdb` (override with `--db PATH`
 or the `MSVOTERS_DB` env var).
 
+## Sample output
+
+From the 2026-07-27 and 2026-08-03 drops (county tables trimmed to the top rows).
+
+### `uv run msvoters totals`
+
+```
+ Registered voters — 2026-08-03 (total 2,088,191)
+┏━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ status   ┃ count     ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━┩
+│ Active   │ 1,852,831 │
+│ Inactive │ 235,360   │
+└──────────┴───────────┘
+
+ Registered voters by county (all 82, sorted)
+┏━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ county       ┃ count   ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ Hinds        │ 169,795 │
+│ Harrison     │ 160,829 │
+│ DeSoto       │ 145,530 │
+│ Rankin       │ 110,029 │
+│ Jackson      │ 99,748  │
+│ …            │ …       │  (76 more counties)
+└──────────────┴─────────┘
+
+ New registrations — vs. 2026-07-27
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ measure                                     ┃ count ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ added to roll (voter IDs new this snapshot) │ 1,356 │
+│ regn_date since 2026-07-27 (stated)         │ 0     │
+└─────────────────────────────────────────────┴───────┘
+note: These measure different things: roll additions vs. stated registration date.
+
+ New registrants by congressional district
+┏━━━━━━━┳━━━━━━━┓
+┃ cong  ┃ count ┃
+┡━━━━━━━╇━━━━━━━┩
+│ USH04 │ 429   │
+│ USH03 │ 373   │
+│ USH01 │ 289   │
+│ USH02 │ 265   │
+└───────┴───────┘
+
+ New registrants by derived party
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ latest_primary_party ┃ count ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ No primary history   │ 1,208 │
+│ Democrat             │ 76    │
+│ Republican           │ 72    │
+└──────────────────────┴───────┘
+
+ Registration trend — trailing 12 months (by stated regn_date)
+┏━━━━━━━━━━━━┳━━━━━━━┓
+┃ month      ┃ count ┃
+┡━━━━━━━━━━━━╇━━━━━━━┩
+│ 2025-08-01 │ 5,766 │
+│ 2025-09-01 │ 6,793 │
+│ 2025-10-01 │ 6,824 │
+│ 2025-11-01 │ 4,965 │
+│ 2025-12-01 │ 5,375 │
+│ 2026-01-01 │ 5,801 │
+│ 2026-02-01 │ 7,082 │
+│ 2026-03-01 │ 7,606 │
+│ 2026-04-01 │ 6,143 │
+│ 2026-05-01 │ 5,370 │
+│ 2026-06-01 │ 6,447 │
+│ 2026-07-01 │ 3,699 │
+└────────────┴───────┘
+```
+
+### `uv run msvoters compare`
+
+```
+ Totals — 2026-07-27 -> 2026-08-03
+┏━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ snapshot   ┃ voters    ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ 2026-07-27 │ 2,087,848 │
+│ 2026-08-03 │ 2,088,191 │
+│ net        │ 343       │
+└────────────┴───────────┘
+
+ Status delta
+┏━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┓
+┃ status   ┃ from      ┃ to        ┃ delta  ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━┩
+│ Inactive │ 230,768   │ 235,360   │ 4,592  │
+│ Active   │ 1,857,080 │ 1,852,831 │ -4,249 │
+└──────────┴───────────┴───────────┴────────┘
+
+ Roll turnover
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ measure                   ┃ count ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ added (new registrations) │ 1,356 │
+│ removed (purges)          │ 1,013 │
+│ net                       │ 343   │
+└───────────────────────────┴───────┘
+
+ County net change (added / removed / net)
+┏━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━┓
+┃ county       ┃ added ┃ removed ┃ net ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━┩
+│ Jackson      │ 116   │ 3       │ 113 │
+│ Harrison     │ 130   │ 35      │ 95  │
+│ Forrest      │ 41    │ 7       │ 34  │
+│ Rankin       │ 65    │ 35      │ 30  │
+│ …            │ …     │ …       │ …   │  (78 more counties; net range −41 to +113)
+└──────────────┴───────┴─────────┴─────┘
+
+ Status movement (voters present in both snapshots)
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┓
+┃ from_status ┃ to_status ┃ count ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━┩
+│ Active      │ Inactive  │ 5,357 │
+│ Inactive    │ Active    │ 499   │
+└─────────────┴───────────┴───────┘
+
+ Derived-party mix shift
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┓
+┃ latest_primary_party ┃ from    ┃ to      ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━┩
+│ No primary history   │ 890,815 │ 891,010 │ 195   │
+│ Republican           │ 665,157 │ 665,229 │ 72    │
+│ Democrat             │ 531,681 │ 531,757 │ 76    │
+│ All Other Parties    │ 194     │ 194     │ 0     │
+│ Green                │ 1       │ 1       │ 0     │
+└──────────────────────┴─────────┴─────────┴───────┘
+```
+
 ## Tests
 
 ```bash
