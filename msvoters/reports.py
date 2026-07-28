@@ -110,7 +110,23 @@ def totals(con, snapshot_date: _dt.date) -> list[Section]:
         [(s or "(blank)", c) for s, c in status_rows],
     ))
 
-    # 2. New registrations vs. previous snapshot.
+    # 2. Registered voters by county (all 82, sorted).
+    county_total_rows = con.execute(
+        """
+        SELECT res_county AS county, COUNT(*) AS n
+        FROM voters
+        WHERE snapshot_date = ? AND res_county IS NOT NULL
+        GROUP BY res_county ORDER BY n DESC
+        """,
+        [snapshot_date],
+    ).fetchall()
+    out.append(Section(
+        "Registered voters by county",
+        ["county", "count"],
+        [(c or "(blank)", n) for c, n in county_total_rows],
+    ))
+
+    # 3. New registrations vs. previous snapshot.
     if prev is None:
         out.append(Section(
             "New registrations vs. previous snapshot",
