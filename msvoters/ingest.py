@@ -9,12 +9,20 @@ The date token packs month/day/year without separators: ``7272026`` = 7/27/2026,
 ``832026`` = 8/3/2026. Parsing strips the trailing 4-digit year, then splits the
 remainder into month/day trying both 1- and 2-digit month widths; if both are
 valid it falls back to the file's mtime to disambiguate.
+
+Drops may also sit inside ``.zip`` archives in the folder. Archive members are
+matched by basename and only extracted (to a temp dir in the folder, removed
+after loading) when their snapshot actually needs to be ingested.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import re
+import shutil
+import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,13 +50,31 @@ _VOTERS = "voters"
 
 @dataclass(frozen=True)
 class DropFile:
-    path: Path
+    path: Path  # the CSV itself, or the .zip that contains it
     snapshot_date: _dt.date
     kind: str  # "voters" | "history"
+    member: str | None = None  # archive member name when path is a .zip
 
     @property
     def filename(self) -> str:
-        return self.path.name
+        return Path(self.member).name if self.member else self.path.name
+
+
+@contextlib.contextmanager
+def materialize(drop: DropFile):
+    """Yield a readable CSV path for *drop*, extracting from its zip if needed.
+
+    Extracted files go in a temp dir next to the archive and are removed on exit.
+    """
+    if drop.member is None:
+        yield drop.path
+        return
+    with tempfile.TemporaryDirectory(dir=drop.path.parent, prefix=".msvoters-unzip-") as tmp:
+        # Write to the member's basename only (never trust archive paths).
+        out = Path(tmp) / drop.filename
+        with zipfile.ZipFile(drop.path) as zf, zf.open(drop.member) as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst, length=1 << 20)
+        yield out
 
 
 # ---------------------------------------------------------------------------
@@ -105,18 +131,43 @@ def parse_filename_date(filename: str, reference: _dt.date | None = None) -> _dt
 # Discovery & pairing
 # ---------------------------------------------------------------------------
 
+def _drop_from_name(name: str, path: Path, ref: _dt.date, member: str | None = None) -> DropFile | None:
+    m = _FILENAME_RE.match(name)
+    if not m:
+        return None
+    kind = _HISTORY if m.group(2) == "VotingHistory" else _VOTERS
+    date = parse_filename_date(name, reference=ref)
+    return DropFile(path=path, snapshot_date=date, kind=kind, member=member)
+
+
 def discover(folder: str | Path) -> list[DropFile]:
-    """Find all SOS weekly files in *folder*, parsed and dated by mtime."""
+    """Find all SOS weekly files in *folder*, loose or inside ``.zip`` archives.
+
+    Dates are disambiguated by file mtime (or the zip member's timestamp). A
+    loose CSV wins over an archive member with the same name.
+    """
     folder = Path(folder)
     drops: list[DropFile] = []
+    loose: set[str] = set()
+    archives: list[Path] = []
     for p in sorted(folder.iterdir()):
-        m = _FILENAME_RE.match(p.name)
-        if not m:
+        if p.suffix.lower() == ".zip" and p.is_file():
+            archives.append(p)
             continue
-        kind = _HISTORY if m.group(2) == "VotingHistory" else _VOTERS
-        ref = _dt.date.fromtimestamp(p.stat().st_mtime)
-        date = parse_filename_date(p.name, reference=ref)
-        drops.append(DropFile(path=p, snapshot_date=date, kind=kind))
+        d = _drop_from_name(p.name, p, _dt.date.fromtimestamp(p.stat().st_mtime))
+        if d:
+            drops.append(d)
+            loose.add(p.name)
+    for z in archives:
+        with zipfile.ZipFile(z) as zf:
+            for info in zf.infolist():
+                name = Path(info.filename).name
+                if info.is_dir() or name in loose or name.startswith("._"):
+                    continue
+                d = _drop_from_name(name, z, _dt.date(*info.date_time[:3]), member=info.filename)
+                if d:
+                    drops.append(d)
+                    loose.add(name)
     return drops
 
 
@@ -292,7 +343,8 @@ def ingest(folder: str | Path, db_path, date_override: _dt.date | None = None) -
             if "voters" not in done and pair["voters"] is not None:
                 con.execute("BEGIN")
                 try:
-                    n = load_voters(con, pair["voters"].path, date)
+                    with materialize(pair["voters"]) as path:
+                        n = load_voters(con, path, date)
                     con.execute(
                         "INSERT INTO ingests (snapshot_date, kind, filename, row_count) "
                         "VALUES (?, 'voters', ?, ?)",
@@ -316,7 +368,8 @@ def ingest(folder: str | Path, db_path, date_override: _dt.date | None = None) -
             if pair["history"] is not None and (date_override is not None or "history" not in done):
                 con.execute("BEGIN")
                 try:
-                    n = load_history(con, pair["history"].path, date)
+                    with materialize(pair["history"]) as path:
+                        n = load_history(con, path, date)
                     con.execute(
                         "INSERT INTO ingests (snapshot_date, kind, filename, row_count) "
                         "VALUES (?, 'history', ?, ?)",
