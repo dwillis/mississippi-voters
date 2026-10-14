@@ -494,3 +494,162 @@ def party_report(con, snapshot_date: _dt.date, since_years: int | None) -> list[
         ))
 
     return out
+
+# ---------------------------------------------------------------------------
+# site data (used by ``publish``)
+#
+# These return plain dicts/lists rather than Sections: they feed JSON files, and
+# the per-county variants are computed for all counties in one grouped pass
+# instead of one query per county.
+# ---------------------------------------------------------------------------
+
+_PARTY_EXPR = "COALESCE(p.latest_primary_party, 'No primary history')"
+
+
+def history(con) -> dict:
+    """Per-snapshot headline numbers and per-county totals, oldest first."""
+    dates = snapshot_dates(con)
+    idx = {d: i for i, d in enumerate(dates)}
+    snaps = [
+        {"date": d.isoformat(), "total": 0, "active": 0, "inactive": 0,
+         "added": None, "removed": None, "net": None, "days": None,
+         "dem": 0, "rep": 0, "other": 0, "no_history": 0}
+        for d in dates
+    ]
+    for d, status, n in con.execute(
+        "SELECT snapshot_date, status, COUNT(*) FROM voters GROUP BY ALL"
+    ).fetchall():
+        s = snaps[idx[d]]
+        s["total"] += n
+        if status == "Active":
+            s["active"] += n
+        elif status == "Inactive":
+            s["inactive"] += n
+
+    # Derived party is evaluated against the latest history file for every
+    # snapshot's roll (same convention as ``compare``).
+    for d, party, n in con.execute(
+        f"""
+        SELECT v.snapshot_date, {_PARTY_EXPR}, COUNT(*)
+        FROM voters v LEFT JOIN voter_party p ON p.voter_id = v.voter_id
+        GROUP BY ALL
+        """
+    ).fetchall():
+        s = snaps[idx[d]]
+        key = ("dem" if party == "Democrat" else "rep" if party == "Republican"
+               else "no_history" if party == "No primary history" else "other")
+        s[key] += n
+
+    counties: dict[str, list[int]] = {}
+    for d, county, n in con.execute(
+        "SELECT snapshot_date, res_county, COUNT(*) FROM voters "
+        "WHERE res_county IS NOT NULL GROUP BY ALL"
+    ).fetchall():
+        counties.setdefault(county, [0] * len(dates))[idx[d]] = n
+
+    for prev, cur in zip(dates, dates[1:]):
+        added = con.execute(
+            "SELECT COUNT(*) FROM voters c WHERE c.snapshot_date=? AND NOT EXISTS "
+            "(SELECT 1 FROM voters p WHERE p.snapshot_date=? AND p.voter_id=c.voter_id)",
+            [cur, prev],
+        ).fetchone()[0]
+        removed = con.execute(
+            "SELECT COUNT(*) FROM voters p WHERE p.snapshot_date=? AND NOT EXISTS "
+            "(SELECT 1 FROM voters c WHERE c.snapshot_date=? AND c.voter_id=p.voter_id)",
+            [prev, cur],
+        ).fetchone()[0]
+        s = snaps[idx[cur]]
+        s["added"], s["removed"], s["net"] = added, removed, added - removed
+        s["days"] = (cur - prev).days
+
+    return {"snapshots": snaps, "counties": counties}
+
+
+def county_summary(con, snapshot_date: _dt.date, prev: _dt.date | None) -> dict[str, dict]:
+    """Per-county totals, status split, derived party, and added/removed vs *prev*."""
+    out: dict[str, dict] = {}
+    for county, total, active, inactive, dem, rep, oth, none in con.execute(
+        """
+        SELECT v.res_county, COUNT(*),
+               COUNT(*) FILTER (WHERE v.status = 'Active'),
+               COUNT(*) FILTER (WHERE v.status = 'Inactive'),
+               COUNT(*) FILTER (WHERE p.latest_primary_party = 'Democrat'),
+               COUNT(*) FILTER (WHERE p.latest_primary_party = 'Republican'),
+               COUNT(*) FILTER (WHERE p.latest_primary_party IS NOT NULL
+                                AND p.latest_primary_party NOT IN ('Democrat','Republican')),
+               COUNT(*) FILTER (WHERE p.latest_primary_party IS NULL)
+        FROM voters v LEFT JOIN voter_party p ON p.voter_id = v.voter_id
+        WHERE v.snapshot_date = ? AND v.res_county IS NOT NULL
+        GROUP BY v.res_county
+        """,
+        [snapshot_date],
+    ).fetchall():
+        out[county] = {"county": county, "total": total, "active": active,
+                       "inactive": inactive, "dem": dem, "rep": rep, "other": oth,
+                       "no_history": none, "added": None, "removed": None, "net": None}
+    if prev is not None:
+        added = dict(con.execute(
+            "SELECT c.res_county, COUNT(*) FROM voters c WHERE c.snapshot_date=? "
+            "AND NOT EXISTS (SELECT 1 FROM voters p WHERE p.snapshot_date=? "
+            "AND p.voter_id=c.voter_id) GROUP BY 1", [snapshot_date, prev]).fetchall())
+        removed = dict(con.execute(
+            "SELECT p.res_county, COUNT(*) FROM voters p WHERE p.snapshot_date=? "
+            "AND NOT EXISTS (SELECT 1 FROM voters c WHERE c.snapshot_date=? "
+            "AND c.voter_id=p.voter_id) GROUP BY 1", [prev, snapshot_date]).fetchall())
+        for county, row in out.items():
+            row["added"] = added.get(county, 0)
+            row["removed"] = removed.get(county, 0)
+            row["net"] = row["added"] - row["removed"]
+    return out
+
+
+def county_new_registrants(con, snapshot_date: _dt.date, prev: _dt.date | None,
+                           top: int = 15) -> dict[str, dict]:
+    """Per-county breakdown of roll additions by cong district / city / ZIP / party."""
+    out: dict[str, dict] = {}
+    if prev is None:
+        return out
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE tmp_new_county AS "
+        "SELECT c.voter_id, c.res_county, c.cong, c.res_city, c.res_zip_code "
+        "FROM voters c WHERE c.snapshot_date=? AND c.res_county IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM voters p WHERE p.snapshot_date=? "
+        "AND p.voter_id=c.voter_id)",
+        [snapshot_date, prev],
+    )
+    for key, expr, limit in [
+        ("by_cong", "t.cong", None),
+        ("by_city", "t.res_city", top),
+        ("by_zip", "t.res_zip_code", top),
+        ("by_party", _PARTY_EXPR, None),
+    ]:
+        rows = con.execute(
+            f"""
+            SELECT t.res_county, {expr} AS k, COUNT(*) AS n
+            FROM tmp_new_county t LEFT JOIN voter_party p ON p.voter_id = t.voter_id
+            GROUP BY ALL ORDER BY t.res_county, n DESC, k
+            """
+        ).fetchall()
+        for county, k, n in rows:
+            bucket = out.setdefault(county, {}).setdefault(key, [])
+            if limit is None or len(bucket) < limit:
+                bucket.append([k or "(blank)", n])
+    return out
+
+
+def county_regn_trend(con, snapshot_date: _dt.date) -> dict[str, list]:
+    """Trailing-12-month registrations by stated regn_date, per county."""
+    out: dict[str, list] = {}
+    for county, mo, n in con.execute(
+        """
+        SELECT res_county, CAST(DATE_TRUNC('month', regn_date) AS DATE), COUNT(*)
+        FROM voters
+        WHERE snapshot_date = ? AND res_county IS NOT NULL
+          AND regn_date <= ? AND regn_date >= (?::DATE - INTERVAL '12 months')
+          AND EXTRACT(YEAR FROM regn_date) >= 1900
+        GROUP BY ALL ORDER BY 1, 2
+        """,
+        [snapshot_date, snapshot_date, snapshot_date],
+    ).fetchall():
+        out.setdefault(county, []).append([mo.isoformat(), n])
+    return out

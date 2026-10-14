@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head>
+<title>Mississippi Voter Rolls: Counties</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="site.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script><script src="site.js"></script>
+</head><body>
+<main>
+  <h1>Counties</h1>
+  <p class="sub" id="asof"></p>
+  <div class="controls">
+    <input type="search" id="q" placeholder="Filter counties…" aria-label="Filter counties">
+    <label><input type="radio" name="mode" value="raw" checked> Counts</label>
+    <label><input type="radio" name="mode" value="per1k"> Per 1,000 registered</label>
+  </div>
+  <div class="tablewrap"><table id="t"><thead><tr></tr></thead><tbody></tbody><tfoot></tfoot></table></div>
+  <p class="note">Δ columns compare total registered with the snapshot closest to 1 week, 4 weeks and 52 weeks earlier
+  (blank until that much history exists). Added/removed are roll changes vs. the previous snapshot. Party shares use derived party (see <a href="index.html">home</a>).</p>
+</main>
+<script>
+(async () => {
+  try {
+    const latest = await getJSON("data/latest.json");
+    renderChrome("counties.html", latest);
+    document.getElementById("asof").textContent = `Snapshot of ${fmtDate(latest.snapshot)} · ${latest.counties.length} counties`;
+    let per1k = false, filter = "";
+    const scale = (v, c) => (v == null ? null : per1k ? 1000 * v / c.total : v);
+    const num = (k) => (c) => scale(c[k], c);
+    const share = (k) => (c) => (c.total ? c[k] / c.total : null);
+    const cols = [
+      { key: "county", label: "County", value: (c) => c.county },
+      { key: "total", label: "Registered", value: (c) => c.total, plain: true },
+      { key: "delta_1wk", label: "Δ 1 wk", value: num("delta_1wk"), signed: true },
+      { key: "delta_4wk", label: "Δ 4 wk", value: num("delta_4wk"), signed: true },
+      { key: "delta_52wk", label: "Δ 52 wk", value: num("delta_52wk"), signed: true },
+      { key: "added", label: "Added", value: num("added") },
+      { key: "removed", label: "Removed", value: num("removed") },
+      { key: "net", label: "Net", value: num("net"), signed: true },
+      { key: "active", label: "% active", value: share("active"), pct: true },
+      { key: "dem", label: "% Dem", value: share("dem"), pct: true },
+      { key: "rep", label: "% Rep", value: share("rep"), pct: true },
+      { key: "no_history", label: "% no primary", value: share("no_history"), pct: true },
+    ];
+    const tbody = document.querySelector("#t tbody");
+    const cell = (col, c) => {
+      const v = col.value(c);
+      if (col.key === "county") return `<td><a href="county.html?c=${c.slug}">${esc(c.county)}</a></td>`;
+      if (v == null) return "<td>–</td>";
+      if (col.pct) return `<td>${(100 * v).toFixed(1)}%</td>`;
+      const s = per1k && !col.plain ? (col.signed && v > 0 ? "+" : "") + v.toFixed(2) : col.signed ? fmtSigned(v) : fmt(v);
+      return `<td class="${col.signed ? signClass(v) : ""}">${s}</td>`;
+    };
+    const visible = () => latest.counties.filter((c) => c.county.toLowerCase().includes(filter));
+    const redraw = makeSortable(document.getElementById("t"), cols, visible, (rows) => {
+      tbody.innerHTML = rows.map((c) => "<tr>" + cols.map((col) => cell(col, c)).join("") + "</tr>").join("");
+      const tot = visible().reduce((a, c) => { for (const k of ["total","added","removed","net","active"]) a[k] = (a[k] || 0) + (c[k] || 0); return a; }, {});
+      document.querySelector("#t tfoot").innerHTML = `<tr><td><strong>${filter ? "Shown" : "State"}</strong></td><td><strong>${fmt(tot.total)}</strong></td><td></td><td></td><td></td><td>${per1k ? "" : fmt(tot.added)}</td><td>${per1k ? "" : fmt(tot.removed)}</td><td>${per1k ? "" : fmtSigned(tot.net)}</td><td>${pct(tot.active, tot.total)}</td><td></td><td></td><td></td></tr>`;
+    }, { key: "total", dir: -1 });
+    document.getElementById("q").addEventListener("input", (e) => { filter = e.target.value.trim().toLowerCase(); redraw(); });
+    document.querySelectorAll("input[name=mode]").forEach((r) => r.addEventListener("change", (e) => { per1k = e.target.value === "per1k"; redraw(); }));
+  } catch (e) { renderChrome("counties.html"); showError(e); }
+})();
+</script>
+</body></html>

@@ -14,7 +14,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from . import db, ingest, reports, subset
+from . import db, ingest, publish as publish_mod, reports, subset
 
 console = Console()
 
@@ -90,12 +90,15 @@ def main() -> None:
 
 
 @main.command(name="ingest")
-@click.argument("folder", default=".")
+@click.argument("folder", default="data")
 @click.option("--date", "date_str", default=None,
               help="Override snapshot date (MM/DD/YYYY or YYYY-MM-DD).")
 @click.option("--db", "db_path", default=None, help="DuckDB path (default data/msvoters.duckdb).")
 def ingest_cmd(folder, date_str, db_path):
-    """Ingest un-ingested weekly SOS drops in FOLDER (oldest first)."""
+    """Ingest un-ingested weekly SOS drops in FOLDER (default data/), oldest first.
+
+    CSVs can be loose or inside .zip files; zips are extracted only as needed.
+    """
     summary = ingest_impl(folder, date_str, db_path)  # noqa: F811
     table = Table(title="Ingest summary")
     table.add_column("date")
@@ -116,6 +119,20 @@ def ingest_cmd(folder, date_str, db_path):
 
 def ingest_impl(folder, date_str, db_path):
     return ingest.ingest(folder, db.resolve_db(db_path), _parse_snapshot_override(date_str))
+
+
+@main.command(name="publish")
+@click.option("--out", "out_dir", default="docs/data", show_default=True,
+              help="Output directory for the site's JSON files.")
+@click.option("--snapshot", "snapshot", default=None, help="Snapshot date (default: latest).")
+@click.option("--db", "db_path", default=None)
+def publish_cmd(out_dir, snapshot, db_path):
+    """Write the static-site JSON (latest, history, per-county) to --out."""
+    res = publish_mod.publish(db.resolve_db(db_path), out_dir, _parse_date(snapshot))
+    console.print(
+        f"published snapshot {res['snapshot']}: {res['files']} files, "
+        f"{res['bytes'] / 1024:.0f} KiB -> {out_dir}"
+    )
 
 
 @main.command()

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head>
+<title>Mississippi Voter Rolls: County</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="site.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script><script src="site.js"></script>
+</head><body>
+<main>
+  <p class="note"><a href="counties.html">← All counties</a></p>
+  <h1 id="name">County</h1>
+  <p class="sub" id="asof"></p>
+  <div class="tiles" id="tiles"></div>
+  <div class="grid2">
+    <div class="card"><h2 style="margin-top:0">Registered over time</h2><div class="chart"><canvas id="c-hist"></canvas></div></div>
+    <div class="card"><h2 style="margin-top:0">Registrations by month (stated date)</h2><div class="chart"><canvas id="c-regn"></canvas></div></div>
+  </div>
+  <h2>Derived party</h2>
+  <div class="tablewrap"><table><thead><tr><th>party</th><th>voters</th><th>share</th></tr></thead><tbody id="party"></tbody></table></div>
+  <h2>New to the roll this snapshot</h2>
+  <div class="grid2" id="newreg"></div>
+  <p class="note" id="nav"></p>
+</main>
+<script>
+(async () => {
+  try {
+    const slug = new URLSearchParams(location.search).get("c");
+    if (!slug || !/^[a-z0-9-]+$/.test(slug)) throw new Error("No county selected");
+    const [latest, d] = await Promise.all([getJSON("data/latest.json"), getJSON(`data/counties/${slug}.json`)]);
+    renderChrome("counties.html", latest);
+    document.title = `${d.county} County · Mississippi Voter Rolls`;
+    document.getElementById("name").textContent = `${d.county} County`;
+    document.getElementById("asof").textContent = `Snapshot of ${fmtDate(d.snapshot)}` + (d.previous ? `, compared with ${fmtDate(d.previous)}` : "");
+    const h = d.history, n = h.length;
+    const tiles = [
+      { label: "Registered", big: fmt(d.total), delta: d.delta_1wk, vals: h.slice(-53) },
+      { label: "Active", big: fmt(d.active), sub: pct(d.active, d.total) + " of registered" },
+      { label: "Inactive", big: fmt(d.inactive), sub: pct(d.inactive, d.total) + " of registered" },
+      { label: "Net roll change", big: d.net == null ? "–" : fmtSigned(d.net), sub: d.net == null ? "" : `+${fmt(d.added)} added · −${fmt(d.removed)} removed` },
+    ];
+    document.getElementById("tiles").innerHTML = tiles.map((x, i) => `<div class="tile"><div class="label">${x.label}</div><div class="big">${x.big}</div>
+      <div class="delta ${x.delta == null ? "" : signClass(x.delta)}">${x.sub ?? (x.delta == null ? "&nbsp;" : fmtSigned(x.delta) + " vs. last snapshot")}</div>
+      ${x.vals ? `<div class="spark"><canvas id="sp${i}"></canvas></div>` : ""}</div>`).join("");
+    tiles.forEach((x, i) => x.vals && sparkline(document.getElementById("sp" + i), x.vals));
+
+    lineChart(document.getElementById("c-hist"), d.history_dates, [{ label: d.county, data: h }]);
+    lineChart(document.getElementById("c-regn"), d.regn_trend_12mo.map((r) => r[0].slice(0, 7)), [{ label: "Registrations", data: d.regn_trend_12mo.map((r) => r[1]) }], { type: "bar", zero: true });
+    document.getElementById("party").innerHTML = [["Democrat", d.dem], ["Republican", d.rep], ["Other parties", d.other], ["No primary history", d.no_history]]
+      .map(([k, v]) => `<tr><td>${k}</td><td>${fmt(v)}</td><td>${pct(v, d.total)}</td></tr>`).join("");
+
+    const nr = d.new_registrants || {};
+    const block = (title, rows, head) => `<div><div class="tablewrap"><table><thead><tr><th>${head}</th><th>new</th></tr></thead><tbody>${
+      (rows || []).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${fmt(v)}</td></tr>`).join("") || '<tr><td colspan="2">none</td></tr>'}</tbody></table></div><p class="note">${title}</p></div>`;
+    document.getElementById("newreg").innerHTML = d.previous
+      ? block("By congressional district", nr.by_cong, "district") + block("Top cities", nr.by_city, "city") + block("Top ZIP codes", nr.by_zip, "ZIP") + block("By derived party", nr.by_party, "party")
+      : "<p class='note'>Needs at least two snapshots.</p>";
+
+    const names = latest.counties, i = names.findIndex((c) => c.slug === slug);
+    document.getElementById("nav").innerHTML = [i > 0 && `<a href="county.html?c=${names[i - 1].slug}">← ${esc(names[i - 1].county)}</a>`,
+      i < names.length - 1 && `<a href="county.html?c=${names[i + 1].slug}">${esc(names[i + 1].county)} →</a>`].filter(Boolean).join(" · ");
+  } catch (e) { renderChrome("counties.html"); showError(e); }
+})();
+</script>
+</body></html>

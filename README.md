@@ -15,12 +15,16 @@ uv sync
 ```
 
 Put the weekly drops (named `Weekly Distribution_kkirkpatrick_<M[M]D[D]YYYY>_94.csv`
-and `...94VotingHistory.csv`) in a folder, then:
+and `...94VotingHistory.csv`) in `data/` (gitignored) and run `uv run msvoters ingest`.
+They can be loose CSVs or still zipped. `ingest` looks inside every `*.zip` in
+the folder, unzips only the files for weeks that haven't been ingested yet
+(into a temp dir that gets deleted after the load), and leaves the zips alone.
+If a loose CSV and a zipped one have the same name, the loose one is used.
 
 ## Commands
 
 ```bash
-uv run msvoters ingest [FOLDER] [--date MM/DD/YYYY]   # load un-ingested pairs, oldest first
+uv run msvoters ingest [FOLDER] [--date MM/DD/YYYY]   # load un-ingested pairs (CSV or .zip), oldest first; FOLDER defaults to data/
 uv run msvoters snapshots                             # list ingested weeks
 uv run msvoters totals [--snapshot YYYY-MM-DD] [--csv DIR]
 uv run msvoters compare [--from DATE] [--to DATE] [--csv DIR]
@@ -177,6 +181,23 @@ note: These measure different things: roll additions vs. stated registration dat
 │ Green                │ 1       │ 1       │ 0     │
 └──────────────────────┴─────────┴─────────┴───────┘
 ```
+
+## Website (GitHub Pages)
+
+`docs/` is a static site (plain HTML/CSS/JS + Chart.js from a CDN) showing the
+latest totals, week-over-week change, a sortable 82-county table, trend charts,
+and a page per county. It reads small JSON files from `docs/data/`, which
+`msvoters publish` regenerates from the DuckDB file:
+
+```bash
+uv run msvoters ingest && uv run msvoters publish
+git add docs && git commit -m "data: <snapshot date>" && git push
+```
+
+`publish [--out docs/data] [--snapshot DATE]` writes `latest.json`, `history.json`
+(every snapshot, rebuilt each run) and `counties/<slug>.json`. Preview locally with
+`python3 -m http.server -d docs`. To enable hosting: repo Settings → Pages →
+Deploy from branch → `main` / `/docs`.
 
 ## Tests
 

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head>
+<title>Mississippi Voter Rolls: Trends</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="site.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script><script src="site.js"></script>
+</head><body>
+<main>
+  <h1>Trends</h1>
+  <p class="sub" id="asof"></p>
+  <div class="controls"><label>Compare a county: <select id="county"><option value="">(none)</option></select></label></div>
+  <div class="grid2">
+    <div class="card"><h2 style="margin-top:0">Total registered</h2><div class="chart"><canvas id="c-total"></canvas></div></div>
+    <div class="card"><h2 style="margin-top:0">Active vs. inactive</h2><div class="chart"><canvas id="c-status"></canvas></div></div>
+    <div class="card"><h2 style="margin-top:0">Weekly roll change</h2><div class="chart"><canvas id="c-flow"></canvas></div></div>
+    <div class="card"><h2 style="margin-top:0">Derived party</h2><div class="chart"><canvas id="c-party"></canvas></div></div>
+  </div>
+  <p class="note" id="gapnote" hidden>Faded bars in the weekly roll change chart span more than one week because a weekly drop is missing, so they are not comparable with single-week bars.</p>
+  <h2>Registrations by month (stated date)</h2>
+  <div class="card"><div class="chart"><canvas id="c-regn"></canvas></div></div>
+  <p class="note">Monthly counts use each voter's stated registration date and can differ from week-to-week roll additions.
+  Snapshots are not always weekly: gaps in the drops appear as longer steps.</p>
+</main>
+<script>
+(async () => {
+  try {
+    const [latest, hist] = await Promise.all([getJSON("data/latest.json"), getJSON("data/history.json")]);
+    renderChrome("trends.html", latest);
+    const S = hist.snapshots, labels = S.map((s) => s.date), col = (k) => S.map((s) => s[k]);
+    document.getElementById("asof").textContent = `${S.length} snapshots, ${fmtDate(labels[0])} to ${fmtDate(labels[labels.length - 1])}`;
+    const pal = palette();
+    const totalDatasets = [{ label: "Statewide", data: col("total") }];
+    const total = lineChart(document.getElementById("c-total"), labels, totalDatasets);
+    const sel = document.getElementById("county");
+    Object.keys(hist.counties).sort().forEach((c) => sel.insertAdjacentHTML("beforeend", `<option>${esc(c)}</option>`));
+    // Statewide and a county differ by ~100x, so the county gets its own axis.
+    sel.addEventListener("change", () => {
+      total.data.datasets = total.data.datasets.slice(0, 1);
+      delete total.options.scales.y2;
+      if (sel.value) {
+        total.data.datasets.push({ label: sel.value, data: hist.counties[sel.value], borderColor: pal[1], backgroundColor: pal[1], borderWidth: 2, pointRadius: 2, tension: .2, yAxisID: "y2" });
+        total.options.scales.y2 = { position: "right", grid: { drawOnChartArea: false }, ticks: { color: css("--muted"), callback: (v) => fmt(v) } };
+      }
+      total.options.plugins.legend.display = !!sel.value;
+      total.update();
+    });
+    const status = lineChart(document.getElementById("c-status"), labels, [{ label: "Active (left)", data: col("active") }, { label: "Inactive (right)", data: col("inactive"), yAxisID: "y2" }]);
+    status.options.scales.y2 = { position: "right", grid: { drawOnChartArea: false }, ticks: { color: css("--muted"), callback: (v) => fmt(v) } };
+    status.update();
+    // Bars covering more than one week (a skipped drop) are drawn faded and flagged in the tooltip.
+    const days = S.slice(1).map((s) => s.days), gap = days.map((d) => d != null && d > 7);
+    const shade = (c) => gap.map((g) => (g ? c + "66" : c));
+    const flow = lineChart(document.getElementById("c-flow"), labels.slice(1), [
+      { label: "Added", data: col("added").slice(1), backgroundColor: shade(pal[2]) },
+      { label: "Removed", data: col("removed").slice(1).map((v) => (v == null ? v : -v)), backgroundColor: shade(pal[1]) }], { type: "bar", stacked: true });
+    flow.options.plugins.tooltip.callbacks.afterTitle = (items) => (gap[items[0].dataIndex] ? `Covers ${days[items[0].dataIndex]} days (a drop is missing)` : "");
+    flow.update();
+    document.getElementById("gapnote").hidden = !gap.some(Boolean);
+    lineChart(document.getElementById("c-party"), labels, [
+      { label: "Democrat", data: col("dem") }, { label: "Republican", data: col("rep"), borderColor: pal[1], backgroundColor: pal[1] },
+      { label: "No primary history", data: col("no_history"), borderColor: pal[4], backgroundColor: pal[4] }]);
+    const rt = latest.regn_trend_12mo;
+    lineChart(document.getElementById("c-regn"), rt.map((r) => r[0].slice(0, 7)), [{ label: "Registrations", data: rt.map((r) => r[1]) }], { type: "bar", zero: true });
+  } catch (e) { renderChrome("trends.html"); showError(e); }
+})();
+</script>
+</body></html>

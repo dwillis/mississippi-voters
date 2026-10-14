@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head>
+<title>Mississippi Voter Rolls</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="site.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script><script src="site.js"></script>
+</head><body>
+<main>
+  <h1>Mississippi voter rolls: this week</h1>
+  <p class="sub" id="asof">Loading…</p>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>Notable this week</h2>
+  <div class="card"><ul class="notable" id="notable"></ul></div>
+
+  <div class="grid2">
+    <div>
+      <h2>Roll turnover</h2>
+      <div class="tablewrap"><table id="turnover"><thead><tr><th>measure</th><th>count</th></tr></thead><tbody></tbody></table></div>
+      <p class="note">Added = voter IDs on this week's roll that weren't on last week's; removed = the reverse (purges, deaths, moves).</p>
+    </div>
+    <div>
+      <h2>Active ↔ Inactive movement</h2>
+      <div class="tablewrap"><table id="movement"><thead><tr><th>from</th><th>to</th><th>voters</th></tr></thead><tbody></tbody></table></div>
+      <p class="note">Voters on both weeks' rolls whose status changed.</p>
+    </div>
+  </div>
+
+  <h2>Derived party mix</h2>
+  <div class="tablewrap"><table id="party"><thead><tr><th>derived party</th><th>last week</th><th>this week</th><th>change</th></tr></thead><tbody></tbody></table></div>
+  <div class="callout">Mississippi doesn't register voters by party. Here a voter's party is the party of the most recent
+  <strong>primary</strong> they voted in. Most new registrants have no primary history yet, so “No primary history” grows fastest.</div>
+  <p><a href="counties.html">See every county →</a> · <a href="trends.html">See trends →</a></p>
+</main>
+<script>
+(async () => {
+  try {
+    const [latest, hist] = await Promise.all([getJSON("data/latest.json"), getJSON("data/history.json")]);
+    renderChrome("index.html", latest);
+    document.getElementById("asof").textContent = latest.previous
+      ? `Snapshot of ${fmtDate(latest.snapshot)}, compared with ${fmtDate(latest.previous)}${latest.days_since_previous > 7 ? ` (${latest.days_since_previous} days earlier; a drop is missing)` : ""}.`
+      : `Snapshot of ${fmtDate(latest.snapshot)} (first snapshot, no comparison yet).`;
+
+    const snaps = hist.snapshots.slice(-53);
+    const series = (k) => snaps.map((s) => s[k]);
+    const t = latest.totals, n = snaps.length;
+    const prevSnap = n > 1 ? snaps[n - 2] : null;
+    const tiles = [
+      { label: "Registered voters", big: fmt(t.total), delta: prevSnap && t.total - prevSnap.total, vals: series("total") },
+      { label: "Active", big: fmt(t.active), delta: prevSnap && t.active - prevSnap.active, vals: series("active") },
+      { label: "Inactive", big: fmt(t.inactive), delta: prevSnap && t.inactive - prevSnap.inactive, vals: series("inactive"), invert: true },
+      { label: "Net roll change", big: latest.turnover ? fmtSigned(latest.turnover.net) : "–",
+        sub: latest.turnover ? `+${fmt(latest.turnover.added)} added · −${fmt(latest.turnover.removed)} removed` : "",
+        vals: snaps.map((s) => s.net) },
+    ];
+    document.getElementById("tiles").innerHTML = tiles.map((x, i) => `
+      <div class="tile"><div class="label">${x.label}</div><div class="big">${x.big}</div>
+      <div class="delta ${x.delta == null ? "" : signClass(x.invert ? -x.delta : x.delta)}">${
+        x.sub ?? (x.delta == null ? "&nbsp;" : fmtSigned(x.delta) + " vs. last snapshot")}</div>
+      <div class="spark"><canvas id="sp${i}"></canvas></div></div>`).join("");
+    tiles.forEach((x, i) => sparkline(document.getElementById("sp" + i), x.vals));
+
+    if (latest.turnover) {
+      const tr = latest.turnover;
+      document.querySelector("#turnover tbody").innerHTML = [["added (new to the roll)", tr.added], ["removed (off the roll)", tr.removed], ["net", tr.net]]
+        .map(([k, v]) => `<tr><td>${k}</td><td class="${k === "net" ? signClass(v) : ""}">${k === "net" ? fmtSigned(v) : fmt(v)}</td></tr>`).join("");
+      document.querySelector("#movement tbody").innerHTML = latest.status_movement
+        .map((r) => `<tr><td>${esc(r.from_status)}</td><td>${esc(r.to_status)}</td><td>${fmt(r.count)}</td></tr>`).join("");
+      document.querySelector("#party tbody").innerHTML = latest.party_mix
+        .map((r) => `<tr><td>${esc(r.latest_primary_party)}</td><td>${fmt(r.from)}</td><td>${fmt(r.to)}</td><td class="${signClass(r.delta)}">${fmtSigned(r.delta)}</td></tr>`).join("");
+
+      const cs = latest.counties.filter((c) => c.net != null);
+      const byNet = [...cs].sort((a, b) => b.net - a.net);
+      const link = (c) => `<a href="county.html?c=${c.slug}">${esc(c.county)}</a>`;
+      const inactiveMove = latest.status_delta.find((r) => r.status === "Inactive");
+      const items = [
+        `Biggest net gains: ${byNet.slice(0, 3).map((c) => `${link(c)} (${fmtSigned(c.net)})`).join(", ")}.`,
+        `Biggest net losses: ${byNet.slice(-3).reverse().map((c) => `${link(c)} (${fmtSigned(c.net)})`).join(", ")}.`,
+      ];
+      if (inactiveMove) items.push(`Inactive voters ${inactiveMove.delta >= 0 ? "rose" : "fell"} by ${fmt(Math.abs(inactiveMove.delta))} (${fmt(inactiveMove.to)} total).`);
+      const hi = [...cs].filter((c) => c.total > 0).sort((a, b) => b.net / b.total - a.net / a.total)[0];
+      if (hi) items.push(`Fastest-growing relative to size: ${link(hi)} (${(100 * hi.net / hi.total).toFixed(2)}% this snapshot).`);
+      document.getElementById("notable").innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+    } else {
+      document.getElementById("notable").innerHTML = "<li>Needs at least two snapshots.</li>";
+    }
+  } catch (e) { renderChrome("index.html"); showError(e); }
+})();
+</script>
+</body></html>
